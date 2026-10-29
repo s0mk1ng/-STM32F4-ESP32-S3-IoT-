@@ -1,0 +1,80 @@
+
+# ==============================
+# Build outputs
+# ==============================
+**/build/
+**/Debug/
+**/Release/
+**/Objects/
+**/Listings/
+**/Output/
+**/out/
+
+# Compiled files
+**/*.o
+**/*.a
+**/*.elf
+**/*.axf
+**/*.hex
+**/*.bin
+**/*.map
+**/*.lst
+**/*.crf
+**/*.dep
+
+# Keil user-specific settings
+**/*.uvoptx
+**/*.uvguix.*
+
+# Local credentials and secrets
+**/wifi_credentials.h
+**/.env
+**/.env.*
+
+# ESP-IDF generated files
+**/managed_components/
+**/sdkconfig
+**/sdkconfig.old
+
+# Python cache
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Temporary files
+**/*.bak
+**/*.tmp
+**/*~
+
+# Keil generated build output
+
+
+# Additional Keil generated files
+**/*.crf
+**/*.d
+**/*.iex
+**/*.dep
+**/*.lnp
+
+# STM32 generated binaries and maps
+**/*.axf
+**/*.hex
+**/*.map
+**/*.build_log.htm
+
+# Keil generated files
+**/*.d
+**/*.dep
+**/*.iex
+**/*.lnp
+**/*.crf
+**/*.o
+**/*.axf
+**/*.hex
+**/*.map
+
+# Keil build reports
+stm32f407/MDK-ARM/wangguanV1.8/*.htm
+
+# Generated Keil scatter file (not used by current project)
+stm32f407/MDK-ARM/wangguanV1.8/*.sct

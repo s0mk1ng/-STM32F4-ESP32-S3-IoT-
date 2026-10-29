@@ -1,0 +1,4 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/esp32-s3",
+    "idf.currentSetup": "D:\\esp\\v6.0.3\\esp-idf"
+}
