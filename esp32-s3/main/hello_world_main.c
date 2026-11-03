@@ -12,7 +12,6 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "esp_wifi.h"
-#include "esp_err.h"
 #include "mqtt_client.h"
 #include <stdbool.h>
 #include "esp_timer.h"
@@ -33,15 +32,16 @@ static const char *TAG = "STM32_UART";
 //记录当前链接状态
 static volatile bool s_mqtt_connected = false;
 
-/* MQTT 测试配置 */
-#define MQTT_BROKER_URI "mqtt://broker.emqx.io:1883"
-#define MQTT_TOPIC      "stm32demo/esp32s3_A83F/hello"
-#define MQTT_TELEMETRY_TOPIC "stm32demo/esp32s3_A83F/telemetry"
+/* MQTT 正式遥测配置 */
+#define MQTT_BROKER_URI \
+    "mqtt://broker.emqx.io:1883"
+
+#define MQTT_TELEMETRY_TOPIC \
+    "stm32demo/esp32s3_A83F/telemetry"
 
 static const char *MQTT_TAG = "MQTT";
 
 static esp_mqtt_client_handle_t s_mqtt_client = NULL;
-static int s_hello_published = 0;
 
 /* 函数声明 */
 static void mqtt_start(void);
@@ -248,37 +248,6 @@ static void mqtt_event_handler(void *handler_args,esp_event_base_t base,int32_t 
 
             ESP_LOGI(MQTT_TAG, "Connected to MQTT Broker");
 
-            /* 只发布一次测试消息 */
-            if (s_hello_published == 0)
-            {
-                int msg_id = esp_mqtt_client_publish(
-                    s_mqtt_client,
-                    MQTT_TOPIC,
-                    "Hello MQTT from ESP32-S3",
-                    0,
-                    0,
-                    0
-                );
-
-                if (msg_id >= 0)
-                {
-                    s_hello_published = 1;
-
-                    ESP_LOGI(
-                        MQTT_TAG,
-                        "Hello MQTT publish accepted, msg_id=%d",
-                        msg_id
-                    );
-                }
-                else
-                {
-                    ESP_LOGE(
-                        MQTT_TAG,
-                        "Hello MQTT publish failed"
-                    );
-                }
-            }
-
             break;
         }
 
@@ -309,7 +278,6 @@ static void mqtt_event_handler(void *handler_args,esp_event_base_t base,int32_t 
 void app_main(void)
 {
     static uint8_t rx_buffer[UART_RX_BUF_SIZE];
-    char text_buffer[UART_RX_BUF_SIZE + 1] = {0};
 
     unsigned int device_id;
     unsigned int frame_seq;
@@ -435,7 +403,7 @@ void app_main(void)
                     );
 
                     
-                    /* 每秒最多发布一条遥测数据 */
+                    /* 每秒最多发布五条遥测数据 */
                     int64_t now_us = esp_timer_get_time();
 
                     if (s_mqtt_connected &&
@@ -566,38 +534,6 @@ void app_main(void)
             rx_line_len = 0;
             ESP_LOGW(TAG, "数据帧过长，重新同步");
         }
-    }
-
-
-        // if (len > 0)
-        // {
-        //     ESP_LOGI(TAG, "Received %d bytes", len);
-
-        //     /* 输出原始字节，方便后续调试二进制协议 */
-        //     ESP_LOG_BUFFER_HEXDUMP(
-        //         TAG,
-        //         rx_buffer,
-        //         len,
-        //         ESP_LOG_INFO
-        //     );
-
-        //     /* 将可打印字符保留下来，其他字节显示为点 */
-        //     for (int i = 0; i < len; i++)
-        //     {
-        //         if (rx_buffer[i] >= 32 && rx_buffer[i] <= 126)
-        //         {
-        //             text_buffer[i] = (char)rx_buffer[i];
-        //         }
-        //         else
-        //         {
-        //             text_buffer[i] = '.';
-        //         }
-        //     }
-
-        //     text_buffer[len] = '\0';
-
-        //     ESP_LOGI(TAG, "ASCII: %s", text_buffer);
-        // }
-        
+    }       
     }
 }

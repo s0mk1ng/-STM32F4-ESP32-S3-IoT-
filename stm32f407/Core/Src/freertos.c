@@ -72,8 +72,6 @@ volatile HAL_StatusTypeDef g_mpu_status;
 
 /* 队列消息 */
 SensorMessage_t g_process_message;
-//调试队列错误帧记录
-volatile osStatus_t g_sensor_queue_status;
 //记录发送次数
 volatile uint32_t g_sensor_queue_send_count = 0U;
 //记录丢帧次数
@@ -90,19 +88,16 @@ volatile HAL_StatusTypeDef g_sht30_read_status;
 volatile uint32_t g_sht30_read_count = 0U;
 volatile uint32_t g_sht30_error_count = 0U;
 
-/* ProcessTask */
+/* OLED分块刷新调试变量 */
+volatile uint32_t g_oled_mutex_retry_count = 0U;
 
-//队列中的数据
+volatile uint32_t g_oled_update_error_count = 0U;
+
+
+/* ProcessTask */
+// ProcessTask 接收到的传感器数据缓存
 MPU6050_SensorData_t g_process_mpu_data;
 SHT30_SensorData_t   g_process_sht30_data;
-//观察SHT30 是否真正进入 ProcessTask
-volatile uint32_t g_process_sht30_count = 0U;
-//记录接收次数
-volatile uint32_t g_process_mpu_count = 0U;
-//用于记录队列消费
-volatile uint32_t g_sensor_queue_count = 0U;
-volatile uint8_t g_sht30_data_valid = 0U;
-
 //g_telemetry作为ProcessTask 的共享数据
 Telemetry_t g_telemetry;
 //g_ui_telemetry是UITask自己拿到的快照
@@ -113,12 +108,6 @@ volatile uint32_t g_comm_mutex_error_count = 0U;
 volatile uint32_t g_comm_format_error_count = 0U;
 //代表UI页数；规定0，1，2	
 uint8_t g_ui_page = 0U;
-
-/* Vibration RMS */
-#define VIBRATION_WINDOW_SAMPLES    100U
-
-float g_vibration_sq_sum = 0.0f;
-uint16_t g_vibration_sample_count = 0U;
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -305,12 +294,13 @@ void StartSensorTask(void *argument)
   (void)argument;
 
   SensorMessage_t sensor_message;
+	osStatus_t queue_status;
 	
 	uint8_t mpu6050_ready = 0U;
-	
-	uint8_t sht30_ready = 0U;
 
   uint32_t next_wake_time;
+	
+	uint32_t next_mpu_retry_time;
 
   uint32_t now;
 
@@ -329,15 +319,26 @@ void StartSensorTask(void *argument)
 	* 1. MPU6050 初始化
 	* ================================================== */
 	
-	if (MPU6050_Init() == HAL_OK)
+	if (osMutexAcquire(i2c1MutexHandle, 10U) == osOK)
 		{
-			g_mpu_status = HAL_OK;
-			mpu6050_ready = 1U;
+			if (MPU6050_Init() == HAL_OK)
+				{
+					g_mpu_status = HAL_OK;
+					mpu6050_ready = 1U;
+				}
+				else
+					{
+						g_mpu_status = HAL_ERROR;
+						mpu6050_ready = 0U;
+					}
+					
+					(void)osMutexRelease(i2c1MutexHandle);
 		}
 		else
 			{
 				g_mpu_status = HAL_ERROR;
-			mpu6050_ready = 0U;
+				mpu6050_ready = 0U;
+				g_i2c1_mutex_error_count++;
 			}
 
 /* ==================================================
@@ -362,6 +363,7 @@ void StartSensorTask(void *argument)
 * 3. 初始化时间
 * ================================================== */
   next_wake_time = osKernelGetTickCount();
+	next_mpu_retry_time = next_wake_time + 1000U;
 
   next_sht30_start_time =next_wake_time + sht30_period_ms;
 
@@ -372,13 +374,28 @@ void StartSensorTask(void *argument)
   for(;;)
   {
 	  now = osKernelGetTickCount();
-		if(mpu6050_ready == 0U)
+		
+		if ((mpu6050_ready == 0U) && ((int32_t)(now - next_mpu_retry_time) >= 0))
 			{
-				if(MPU6050_Init() == HAL_OK)
+				if (osMutexAcquire(i2c1MutexHandle, 2U) == osOK)
 					{
-						mpu6050_ready = 1U;
-						g_mpu_status = HAL_OK;
+						if (MPU6050_Init() == HAL_OK)
+							{
+								mpu6050_ready = 1U;
+								g_mpu_status = HAL_OK;
+							}
+							else
+								{
+									g_mpu_status = HAL_ERROR;
+								}
+
+								(void)osMutexRelease(i2c1MutexHandle);
 					}
+					else
+						{
+							g_i2c1_mutex_error_count++;
+						}
+						next_mpu_retry_time = now + 1000U;
 			}
 
 
@@ -443,9 +460,9 @@ void StartSensorTask(void *argument)
            /* -----------------------------
             * 发送 MPU6050 数据
             * ----------------------------- */
-           g_sensor_queue_status =osMessageQueuePut(sensorQueueHandle,&sensor_message,0U,0U);
+           queue_status =osMessageQueuePut(sensorQueueHandle,&sensor_message,0U,0U);
 
-           if (g_sensor_queue_status == osOK)
+           if (queue_status == osOK)
             {
 							g_sensor_queue_send_count++;   
 						}    
@@ -518,9 +535,9 @@ void StartSensorTask(void *argument)
          
 					sensor_message.data.sht30.humidity_rh = g_sht30_data.humidity_rh;
             
-					g_sensor_queue_status = osMessageQueuePut(sensorQueueHandle,&sensor_message,0U,0U);
+					queue_status = osMessageQueuePut(sensorQueueHandle,&sensor_message,0U,0U);
 							
-					if (g_sensor_queue_status == osOK)					
+					if (queue_status == osOK)					
 					{           					
 						g_sensor_queue_send_count++;          			
 					}          
@@ -654,13 +671,11 @@ void StartProcessTask(void *argument)
 						osMutexRelease(telemetryMutexHandle);
 					}
 					
-					g_process_mpu_count++;
-					
 					break;						
 				
              
 				case SENSOR_TYPE_SHT30:
-					/* 保存处理后的SHT30数据 */
+					/* 将队列中的SHT30数据复制到处理缓存 */
 				
 				g_process_sht30_data = g_process_message.data.sht30;
 				
@@ -681,13 +696,8 @@ void StartProcessTask(void *argument)
 						
 					}
 					
-					g_process_sht30_count++;
-					
 					break;
               
-				case SENSOR_TYPE_INA219:                   
-              
-				break;
               
 				default:
 					
@@ -778,8 +788,19 @@ void StartUITask(void *argument)
   /* USER CODE BEGIN StartUITask */
 	
 	(void)argument;
+
 	uint8_t event;
 	osStatus_t ui_status;
+
+	/* OLED分块刷新状态 */
+	uint8_t oled_page = 0U;
+	uint8_t oled_column = 0U;
+	uint8_t oled_update_pending = 0U;
+
+	uint32_t next_ui_refresh_tick = 0U;
+	uint32_t now;
+
+	HAL_StatusTypeDef oled_status;
 	
   /* Infinite loop */
   for(;;)
@@ -788,7 +809,7 @@ void StartUITask(void *argument)
 * 0. 处理按键事件
 *-------------------------------------------------*/
 		
-		ui_status = osMessageQueueGet(uiEventQueueHandle,&event,NULL,200U);
+		ui_status = osMessageQueueGet(uiEventQueueHandle,&event,NULL,0U);
 		
 		if (ui_status == osOK)
 		{
@@ -798,12 +819,19 @@ void StartUITask(void *argument)
 * 1. 获取Telemetry快照
 *-------------------------------------------------*/
 		
-		if (osMutexAcquire(telemetryMutexHandle, 10U) == osOK)
-			{
-				g_ui_telemetry = g_telemetry;
+		now = osKernelGetTickCount();
 
-				osMutexRelease(telemetryMutexHandle);
-			}
+		/* 只有上一帧刷新完成，才开始绘制下一帧 */
+		if ((oled_update_pending == 0U) && ((int32_t)(now - next_ui_refresh_tick) >= 0))
+			{
+				next_ui_refresh_tick = now + 200U;
+				
+				if (osMutexAcquire(telemetryMutexHandle, 10U) == osOK)
+					{
+						g_ui_telemetry = g_telemetry;
+						
+						osMutexRelease(telemetryMutexHandle);
+					}
 			
 /*--------------------------------------------------
 * 2. 清空OLED显存
@@ -1005,18 +1033,66 @@ void StartUITask(void *argument)
 
 		g_ui_page = 0U;
 		break;
-}
-			
+				}
+				/* 当前帧绘制完成，准备分块刷新 */
+				oled_page = 0U;
+				oled_column = 0U;
+				oled_update_pending = 1U;
+			} 
+/* 结束200ms界面绘制周期 */
+										
 /*--------------------------------------------------
-* 5. 使用I2C1 Mutex刷新OLED
-*-------------------------------------------------*/
-							
-							if (osMutexAcquire(i2c1MutexHandle, 10U) == osOK)
-								{
-									OLED_Update();
+ * 5. OLED分块刷新
+ * 每次只发送一个数据块
+ *--------------------------------------------------*/
 
-									osMutexRelease(i2c1MutexHandle);
-								}
+if (oled_update_pending != 0U)
+{
+    if (osMutexAcquire(i2c1MutexHandle, 2U) == osOK)
+    {
+        /* 发送当前数据块 */
+        oled_status = OLED_UpdateChunk(
+            oled_page,
+            oled_column
+        );
+
+        /* 无论传输是否成功，都释放Mutex */
+        (void)osMutexRelease(i2c1MutexHandle);
+
+        if (oled_status == HAL_OK)
+        {
+            /* 当前数据块发送成功 */
+
+            oled_column += OLED_UPDATE_CHUNK_SIZE;
+
+            /* 当前Page发送完成 */
+            if (oled_column >= OLED_WIDTH)
+            {
+                oled_column = 0U;
+                oled_page++;
+
+                /* 整屏刷新完成 */
+                if (oled_page >= (OLED_HEIGHT / 8U))
+                {
+                    oled_update_pending = 0U;
+                }
+            }
+        }
+        else
+        {
+            /* 发送失败，保留当前位置，下次重试 */
+            g_oled_update_error_count++;
+        }
+    }
+    else
+    {
+        /* Mutex暂时不可用，下次循环重试 */
+        g_oled_mutex_retry_count++;
+    }
+}
+
+/* 让出CPU，给其他任务运行机会 */
+osDelay(1U);
 
 /*--------------------------------------------------
 * 6. UI刷新周期 200ms = 5Hz

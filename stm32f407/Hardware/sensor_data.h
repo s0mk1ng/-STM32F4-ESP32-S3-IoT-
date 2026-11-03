@@ -2,7 +2,6 @@
 #define __SENSOR_DATA_H
 #define TELEMETRY_VALID_MPU6050    (1U << 0)
 #define TELEMETRY_VALID_SHT30      (1U << 1)
-#define TELEMETRY_VALID_INA219     (1U << 2)
 #define TELEMETRY_VALID_DERIVED    (1U << 3)
 
 #include <stdint.h>
@@ -48,18 +47,6 @@ typedef struct
 } SHT30_SensorData_t;
 
 /* =========================
- * INA219 数据
- * ========================= */
-typedef struct
-{
-    float voltage_v;
-    float current_a;
-    float power_w;
-
-} INA219_SensorData_t;
-
-
-/* =========================
  * 传感器类型
  * ========================= */
 
@@ -67,8 +54,6 @@ typedef enum
 {
     SENSOR_TYPE_MPU6050 = 0U,
     SENSOR_TYPE_SHT30,
-    SENSOR_TYPE_INA219
-
 } SensorType_t;
 
 /* =========================
@@ -85,9 +70,7 @@ typedef struct
       MPU6050_SensorData_t mpu6050;
         
 			SHT30_SensorData_t sht30;
-				
-			INA219_SensorData_t  ina219;
-       
+				      
     } data;
 
 } SensorMessage_t;
@@ -136,11 +119,6 @@ typedef struct
 	/* SHT30 */
 	float temperature_c;
 	float humidity_rh;
-
-	/* INA219 */
-	float voltage_v;
-	float current_a;
-	float power_w;
 	
 	/* Valid mask */
 	uint8_t valid_mask;

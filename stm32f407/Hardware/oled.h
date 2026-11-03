@@ -5,6 +5,8 @@
 
 #define OLED_WIDTH      128U
 #define OLED_HEIGHT     64U
+/* OLED分块刷新：每次发送8字节 */
+#define OLED_UPDATE_CHUNK_SIZE  8U
 
 #define OLED_I2C_ADDR_3C    (0x3CU << 1)
 #define OLED_I2C_ADDR_3D    (0x3DU << 1)
@@ -14,6 +16,7 @@ void OLED_Init(void);
 void OLED_Clear(void);
 void OLED_Fill(uint8_t value);
 void OLED_Update(void);
+HAL_StatusTypeDef OLED_UpdateChunk(uint8_t page, uint8_t column);
 
 void OLED_Test(void);
 

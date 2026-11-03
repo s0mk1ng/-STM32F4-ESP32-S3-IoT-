@@ -30,8 +30,7 @@ static HAL_StatusTypeDef OLED_WriteCommand(uint8_t cmd)
 /*-----------------------------------------------------------
  * 向SSD1306发送一组命令
  *----------------------------------------------------------*/
-static HAL_StatusTypeDef OLED_WriteCommands(const uint8_t *cmds,
-                                            uint16_t len)
+static HAL_StatusTypeDef OLED_WriteCommands(const uint8_t *cmds,uint16_t len)
 {
     uint8_t buffer[32];
 
@@ -84,7 +83,7 @@ void OLED_Init(void)
 
         0x8D, 0x14, /* Charge Pump Enable */
 
-        0x20, 0x00, /* Memory Addressing Mode = Horizontal */
+        0x20, 0x02, /* Memory Addressing Mode = Page */
 
         0xA1,       /* Segment Remap */
 
@@ -210,6 +209,65 @@ void OLED_Update(void)
             );
         }
     }
+}
+
+/*-----------------------------------------------------------
+ * OLED分块刷新
+ *
+ * page   : 0~7
+ * column : 0~120，每次增加8
+ *
+ * 每次只发送8字节显示数据
+ * 不在本函数内部获取Mutex，由调用任务负责互斥保护
+ *----------------------------------------------------------*/
+HAL_StatusTypeDef OLED_UpdateChunk(uint8_t page, uint8_t column)
+{
+    uint8_t addr_cmds[3];
+    uint8_t data[OLED_UPDATE_CHUNK_SIZE + 1U];
+    uint16_t offset;
+
+    /* 参数检查 */
+    if ((page >= (OLED_HEIGHT / 8U)) ||
+        (column >= OLED_WIDTH) ||
+        ((column % OLED_UPDATE_CHUNK_SIZE) != 0U))
+    {
+        return HAL_ERROR;
+    }
+
+    /* 设置Page和Column地址 */
+    addr_cmds[0] = (uint8_t)(0xB0U | page);
+
+    addr_cmds[1] = (uint8_t)(column & 0x0FU);
+
+    addr_cmds[2] = (uint8_t)(0x10U | ((column >> 4U) & 0x0FU));
+
+    /* 发送地址设置命令 */
+    if (OLED_WriteCommands(addr_cmds, sizeof(addr_cmds)) != HAL_OK)
+    {
+        return HAL_ERROR;
+    }
+
+    /* 第一个字节0x40表示后续为显示数据 */
+    data[0] = 0x40U;
+
+    /* 计算显存偏移 */
+    offset = (uint16_t)page * OLED_WIDTH + column;
+
+    /* 复制8字节显存数据 */
+    memcpy(
+        &data[1],
+        &OLED_GRAM[offset],
+        OLED_UPDATE_CHUNK_SIZE
+    );
+
+    /* 发送显示数据 */
+    return HAL_I2C_Master_Transmit(
+        &hi2c1,
+        oled_i2c_addr,
+        data,
+        sizeof(data),
+        100U
+    );
 }
 
 /*-----------------------------------------------------------
