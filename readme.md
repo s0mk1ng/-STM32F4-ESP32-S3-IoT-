@@ -87,9 +87,8 @@ STM32F407 ── ASCII TLM,...\r\n ──> ESP32-S3 UART1
 | SSD1306 OLED 128×64 | 本地三页面 HMI | 当前显示链 |
 | ESP32-S3 | UART 接收、Wi-Fi、MQTT | 当前网络侧源码已实现 |
 | W25Q64 | 后续短期缓存和 Store-and-Forward | 规划接入，尚未并入当前主链 |
-| INA219 | — | **永久排除** |
 
-### 3.1 引脚记录（沿用 V1.2 项目记录，改板/接线前须复核）
+### 3.1 引脚记录
 
 | 引脚/资源 | 用途 | 说明 |
 |---|---|---|
@@ -101,7 +100,7 @@ STM32F407 ── ASCII TLM,...\r\n ──> ESP32-S3 UART1
 | PA8 | TIM1_CH1 PWM | 后续执行器/PWM 规划 |
 | PA13 / PA14 | SWDIO / SWCLK | 下载与调试，保留 |
 
-历史时钟基线（来自 V1.2 记录）：HSE 8 MHz，SYSCLK 168 MHz，AHB 168 MHz，APB1 42 MHz，APB2 84 MHz，HAL Timebase TIM6，CMSIS-RTOS2 / CMSIS_V2，FreeRTOS Tick 1000 Hz。应以当前 `.ioc` 和实机配置再次核对。
+HSE 8 MHz，SYSCLK 168 MHz，AHB 168 MHz，APB1 42 MHz，APB2 84 MHz，HAL Timebase TIM6，CMSIS-RTOS2 / CMSIS_V2，FreeRTOS Tick 1000 Hz。实机配置需要参照MUC外接或内部晶振进行再次核对。
 
 ## 4. STM32 FreeRTOS 软件架构
 
@@ -132,7 +131,7 @@ STM32F407 ── ASCII TLM,...\r\n ──> ESP32-S3 UART1
 - ProcessTask 将 raw accel 换算为 g，并计算三轴加速度模长。
 - Yaw 仅由陀螺仪积分时会随时间漂移；没有磁力计时不能解释为绝对磁北航向。
 
-驱动层量程和陀螺仪 Raw→°/s 比例系数需要在最新 `mpu6050.c` 中复核。V1.2 历史审查曾记录 ±250 °/s 与 `/16.4f` 换算不一致、应核对 131 LSB/(°/s)；本次未上传 `mpu6050.c`，不能据此断言当前驱动已修正。
+驱动层量程和陀螺仪 Raw→°/s 比例系数需要在最新 `mpu6050.c` 中复核。
 
 ### 5.2 SHT30
 
@@ -152,11 +151,11 @@ STM32F407 ── ASCII TLM,...\r\n ──> ESP32-S3 UART1
 | 进入 CRITICAL | RMS ≥ 0.15 g |
 | CRITICAL 降级 WARNING | RMS < 0.12 g；若低于 0.04 g 则直接恢复 NORMAL |
 
-这些是当前代码参数，不代表已经完成行业标准标定。后续应使用实际设备工况数据确定阈值。
+这些是当前静止状态代码参数，不代表已经完成行业标准标定。后续应使用实际设备工况数据确定阈值。
 
 ## 6. Telemetry 数据结构与有效位
 
-清理 INA219 后，`Telemetry_t` 保留通信元信息、MPU6050 姿态与加速度、派生加速度指标、振动 RMS/状态、SHT30 温湿度和 `valid_mask`。
+`Telemetry_t` 保留通信元信息、MPU6050 姿态与加速度、派生加速度指标、振动 RMS/状态、SHT30 温湿度和 `valid_mask`。
 
 ```c
 #define TELEMETRY_VALID_MPU6050    (1U << 0)
@@ -165,11 +164,10 @@ STM32F407 ── ASCII TLM,...\r\n ──> ESP32-S3 UART1
 #define TELEMETRY_VALID_DERIVED    (1U << 3)
 ```
 
-保留 DERIVED 为 bit3 是为了不改变当前有效位编码。删除 INA219 后 bit2 作为保留位。
 
 ## 7. STM32 ↔ ESP32-S3 当前 UART 协议
 
-当前实现为 ASCII 文本行协议，不是二进制帧。STM32 `CommTask` 从 `Telemetry_t` 复制快照，使用 `snprintf()` 生成以 `TLM,` 开头、以 CRLF 结束的文本，再通过 `huart3` 调用 `HAL_UART_Transmit()` 发送。
+当前版本实现为 ASCII 文本行协议，不是二进制帧。STM32 `CommTask` 从 `Telemetry_t` 复制快照，使用 `snprintf()` 生成以 `TLM,` 开头、以 CRLF 结束的文本，再通过 `huart3` 调用 `HAL_UART_Transmit()` 发送。
 
 ```text
 TLM,device_id,frame_seq,timestamp_ms,
@@ -225,37 +223,7 @@ STM32 CommTask 约每 100 ms 发送一次，约 10 Hz。ESP32 使用 UART_NUM_1�
 
 **阶段结论：** 项目已进入具备完整功能链代码的 DEMO/MVP 阶段。若 MQTTX 能持续收到字段正确、序号递增的 JSON，且断网重连和长时间运行通过，即可正式验收当前端到端 DEMO；当前还不能称为工业级可靠性产品。
 
-## 10. 本轮代码清理清单
-
-### 10.1 `sensor_data.h`
-
-删除：
-
-- `TELEMETRY_VALID_INA219`
-- `INA219_SensorData_t`
-- `SENSOR_TYPE_INA219`
-- `SensorMessage_t.data.ina219`
-- `Telemetry_t.voltage_v/current_a/power_w`
-
-保留 `TELEMETRY_VALID_DERIVED` 为 bit3；bit2 保留。
-
-### 10.2 `freertos.c`
-
-建议删除无引用或仅用于调试的数据：
-
-- `g_sensor_queue_count`
-- `g_sht30_data_valid`
-- `g_vibration_sq_sum`
-- `g_vibration_sample_count`
-- `g_process_mpu_data` / `g_process_sht30_data` 及对应赋值
-- `g_process_mpu_count` / `g_process_sht30_count` 及递增语句
-- 第二处重复的 `VIBRATION_WINDOW_SAMPLES`
-
-建议保留故障/队列/通信诊断计数：`g_i2c1_mutex_error_count`、`g_sensor_queue_send_count`、`g_sensor_queue_drop_count`、`g_sht30_read_count`、`g_sht30_error_count`、`g_oled_mutex_retry_count`、`g_oled_update_error_count`、`g_comm_tx_ok_count`、`g_comm_tx_error_count`、`g_comm_mutex_error_count`、`g_comm_format_error_count`。
-
-`g_mpu_data`、`g_mpu_physical_data`、`g_mpu_status`、`g_sht30_data`、`g_sht30_start_status`、`g_sht30_read_status`、`g_sensor_queue_status` 和 `g_process_message` 参与实际采集/状态判断/队列操作，不应仅因名称带 `g_` 就删除。后续可在确认全工程无 `extern` 引用后，再考虑局部化。
-
-### 10.3 `hello_world_main.c`
+## 10.`hello_world_main.c`
 
 - 删除未使用的 `text_buffer` 和已注释的原始 HEX/ASCII 调试输出代码。
 - 删除重复的 `esp_err.h` include。
@@ -325,16 +293,9 @@ CRC 覆盖 VER 至 PAYLOAD；SEQ 用于识别重复/丢帧；ACK/超时重传作
 - `valid_mask` 主要表示数据曾经有效；后续增加时间戳新鲜度/超时判定。
 - MPU6050 姿态精度受零偏、安装方向、温漂和算法限制；Yaw 无磁力计校正会漂移。
 - 当前未接入 W25Q64、ThingsBoard、执行器控制、看门狗和 OTA。
-- 本次审查只覆盖本轮上传的三个源文件；完整工程仍需全局搜索 INA219 残留并全量编译。
 
-## 14. 跨会话恢复清单
 
-必须：最新 `freertos.c`、`sensor_data.h`、`hello_world_main.c`。  
-强烈建议：`mpu6050.c/.h`、`sht30.c/.h`、`oled.c/.h`、`main.c`、`usart.c/.h`、当前 CubeMX `.ioc`。  
-通信联调：STM32 原始 TLM 日志、ESP32 串口日志、MQTTX 订阅 JSON 截图或导出。  
-硬件：实际核心板原理图、STM32↔ESP32 接线照片、传感器和 OLED 接线记录。
-
-## 15. 本版本结论
+## 14. 本版本结论
 
 V1.3 将项目状态从 V1.2 的“STM32 本地采集与 OLED HMI 基线”更新为“STM32 采集/边缘处理/本地 HMI + CommTask 文本遥测 + ESP32-S3 UART/Wi-Fi/MQTT 源码链路已形成”的阶段性 DEMO/MVP。
 
