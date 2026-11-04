@@ -5,7 +5,6 @@
 STM32F407VET6 + FreeRTOS + MPU6050 + SHT30 + OLED + ESP32-S3 + UART + Wi-Fi + MQTT
 
 > 用途：当前实现归档、后续开发连续性、项目验收与答辩复盘。  
-> 固定约束：**INA219 永久排除**，不进入硬件、驱动、队列、Telemetry、UART 协议、MQTT JSON 或未来升级计划。
 
 ## 0. 项目基线与开发约定
 
