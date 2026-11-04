@@ -27,22 +27,49 @@
 
 static char rx_line[192];
 static size_t rx_line_len = 0;
+static bool rx_discarding = false;
 
 static const char *TAG = "STM32_UART";
 //记录当前链接状态
 static volatile bool s_mqtt_connected = false;
 
 /* MQTT 正式遥测配置 */
-#define MQTT_BROKER_URI \
-    "mqtt://broker.emqx.io:1883"
+#define MQTT_BROKER_URI "mqtt://broker.hivemq.com:1883"
 
-#define MQTT_TELEMETRY_TOPIC \
-    "stm32demo/esp32s3_A83F/telemetry"
+#define MQTT_TELEMETRY_TOPIC "stm32demo/esp32s3_A83F/telemetry"
 
 static const char *MQTT_TAG = "MQTT";
 
 static esp_mqtt_client_handle_t s_mqtt_client = NULL;
 
+/* ================= MQTT V1.4 RAM Cache ================= */
+
+/* 单条 JSON 最大长度 */
+#define MQTT_PAYLOAD_MAX_LEN 384U
+
+/* 缓存最多保存128条遥测数据 */
+#define MQTT_CACHE_CAPACITY 128U
+
+/* 每次最多向 MQTT Outbox 提交4条历史数据 */
+#define MQTT_CACHE_BATCH_MAX 4U
+
+/* MQTT 数据环形缓存 */
+static char s_mqtt_cache[MQTT_CACHE_CAPACITY][MQTT_PAYLOAD_MAX_LEN];
+
+/* 环形缓存读写位置 */
+static size_t s_mqtt_cache_head = 0;
+static size_t s_mqtt_cache_tail = 0;
+
+/* 当前缓存的数据数量 */
+static size_t s_mqtt_cache_count = 0;
+
+/* 缓存溢出计数 */
+static uint32_t s_mqtt_cache_drop_count = 0;
+
+/* MQTT Outbox 入队失败计数 */
+static uint32_t s_mqtt_enqueue_fail_count = 0;
+/* 缓存累计写入次数 */
+static uint32_t s_mqtt_cache_push_total = 0;
 /* 函数声明 */
 static void mqtt_start(void);
 
@@ -52,6 +79,147 @@ static void mqtt_event_handler(
     int32_t event_id,
     void *event_data
 );
+
+
+/* 将 JSON 数据写入 RAM 环形缓存 */
+static bool mqtt_cache_push(
+    const char *payload,
+    size_t payload_len
+)
+{
+    if (payload == NULL ||
+        payload_len >= MQTT_PAYLOAD_MAX_LEN)
+    {
+        ESP_LOGE(MQTT_TAG, "Invalid MQTT cache payload");
+        return false;
+    }
+
+    /* 缓存已满，保留旧数据，丢弃最新数据 */
+    if (s_mqtt_cache_count >= MQTT_CACHE_CAPACITY)
+    {
+        s_mqtt_cache_drop_count++;
+
+        if (s_mqtt_cache_drop_count == 1U ||
+            s_mqtt_cache_drop_count % 50U == 0U)
+        {
+            ESP_LOGW(
+                MQTT_TAG,
+                "MQTT cache full, dropped newest data, total=%lu",
+                (unsigned long)s_mqtt_cache_drop_count
+            );
+        }
+
+        return false;
+    }
+
+    /* 复制 JSON 数据 */
+    memcpy(
+        s_mqtt_cache[s_mqtt_cache_tail],
+        payload,
+        payload_len
+    );
+
+    s_mqtt_cache[s_mqtt_cache_tail][payload_len] = '\0';
+
+    /* 更新写入位置 */
+    s_mqtt_cache_tail =
+        (s_mqtt_cache_tail + 1U) % MQTT_CACHE_CAPACITY;
+
+    s_mqtt_cache_count++;
+
+    s_mqtt_cache_push_total++;
+
+    /* 每产生5条遥测数据，打印一次缓存状态 */
+    if (s_mqtt_cache_push_total % 5U == 0U)
+    {
+        ESP_LOGI(
+            MQTT_TAG,
+            "CACHE_PUSH: total=%lu, pending=%u, connected=%d, latest=%s",
+            (unsigned long)s_mqtt_cache_push_total,
+            (unsigned)s_mqtt_cache_count,
+            (int)s_mqtt_connected,
+            payload
+        );
+    }
+
+    return true;
+}
+
+
+/* 批量将缓存中的数据提交到 MQTT Outbox */
+static void mqtt_cache_process(void)
+{
+    if (!s_mqtt_connected ||
+        s_mqtt_client == NULL ||
+        s_mqtt_cache_count == 0U)
+    {
+        return;
+    }
+
+    /* 每轮最多处理4条 */
+    for (size_t i = 0;
+         i < MQTT_CACHE_BATCH_MAX &&
+         s_mqtt_cache_count > 0U;
+         i++)
+    {
+        /* 获取最早的一条历史数据 */
+        const char *payload =
+            s_mqtt_cache[s_mqtt_cache_head];
+
+        size_t payload_len = strlen(payload);
+
+        if (payload_len == 0U)
+        {
+            ESP_LOGE(MQTT_TAG, "Cached payload is empty");
+            break;
+        }
+
+        /* 提交到 MQTT Outbox，使用 QoS 1 */
+        int msg_id = esp_mqtt_client_enqueue(
+            s_mqtt_client,
+            MQTT_TELEMETRY_TOPIC,
+            payload,
+            (int)payload_len,
+            1,
+            0,
+            false
+        );
+
+        if (msg_id >= 0)
+        {
+            /* 入队成功，移除 RAM 中的历史数据 */
+            s_mqtt_cache_head =
+                (s_mqtt_cache_head + 1U)
+                % MQTT_CACHE_CAPACITY;
+
+            s_mqtt_cache_count--;
+
+            s_mqtt_enqueue_fail_count = 0;
+
+            ESP_LOGI(
+                MQTT_TAG,
+                "CACHE_ENQUEUED: msg_id=%d, remaining=%u, payload=%s",
+                msg_id,
+                (unsigned)s_mqtt_cache_count,
+                payload
+            );
+        }
+        else
+        {
+            s_mqtt_enqueue_fail_count++;
+
+            ESP_LOGW(
+                MQTT_TAG,
+                "CACHE_ENQUEUE_FAILED: msg_id=%d, retries=%lu",
+                msg_id,
+                (unsigned long)s_mqtt_enqueue_fail_count
+            );
+
+            /* 入队失败，保留当前数据，下次继续 */
+            break;
+        }
+    }
+}
 
 
 /**
@@ -112,6 +280,20 @@ static void mqtt_start(void)
     {
         return;
     }
+
+    /* 获取 ESP32-S3 的 Wi-Fi MAC 地址 */
+    uint8_t mac[6] = {0};
+
+    ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, mac));
+
+    /* 打印 ESP-IDF 默认 MQTT Client ID */
+    ESP_LOGI(
+        MQTT_TAG,
+        "Default MQTT Client ID: ESP32_%02X%02X%02X",
+        mac[3],
+        mac[4],
+        mac[5]
+    );
 
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER_URI,
@@ -259,12 +441,37 @@ static void mqtt_event_handler(void *handler_args,esp_event_base_t base,int32_t 
             break;
         }
 
-        case MQTT_EVENT_ERROR:
+        case MQTT_EVENT_PUBLISHED:
         {
-            ESP_LOGE(MQTT_TAG, "MQTT connection error");
+            esp_mqtt_event_handle_t event = event_data;
+
+            if (event != NULL)
+            {
+                ESP_LOGI(
+                    MQTT_TAG,
+                    "PUBACK_RECEIVED: msg_id=%d",
+                    event->msg_id
+                );
+            }
+
             break;
         }
 
+        case MQTT_EVENT_ERROR:
+        {
+            esp_mqtt_event_handle_t event = event_data;
+            ESP_LOGE(MQTT_TAG, "MQTT connection error");
+
+            if (event != NULL && event->error_handle != NULL)
+            {
+                ESP_LOGE(MQTT_TAG,"MQTT error type: %d",event->error_handle->error_type);
+                ESP_LOGE(MQTT_TAG,"Socket errno: %d",event->error_handle->esp_transport_sock_errno);
+                ESP_LOGE(MQTT_TAG,"TLS last error: 0x%x, TLS stack error: 0x%x",(unsigned int)event->error_handle->esp_tls_last_esp_err,(unsigned int)event->error_handle->esp_tls_stack_err);
+                ESP_LOGE(MQTT_TAG,"Connect return code: %d",(int)event->error_handle->connect_return_code);
+            }
+
+            break;
+        }
         default:
             break;
     }
@@ -299,8 +506,9 @@ void app_main(void)
     unsigned int valid_mask;
 
     int parsed_fields;
+    int consumed_chars = -1;
     //保存即将发布的 JSON 数据
-    char mqtt_payload[320];
+    char mqtt_payload[MQTT_PAYLOAD_MAX_LEN];
     //记录格式化后的 JSON 长度
     int payload_len;
     //记录上一次发布的时间，避免每收到一帧就向服务器发送一条消息
@@ -338,6 +546,23 @@ void app_main(void)
         {
             char ch = (char)rx_buffer[i];
 
+            /* 如果当前处于超长帧丢弃状态 */
+            
+            if (rx_discarding)
+            {
+                /* 收到换行符，说明异常帧已经结束 */
+                if (ch == '\n')
+                {
+                    rx_discarding = false;
+                    rx_line_len = 0;
+
+                    ESP_LOGW(TAG, "超长帧丢弃完成，恢复接收");
+                }
+
+                /* 丢弃状态下不处理其他字符 */
+                continue;
+            }
+
             if (ch == '\n')
             {
                 /* 去掉末尾的 \r */
@@ -354,7 +579,7 @@ void app_main(void)
                {
                 parsed_fields = sscanf(
                     rx_line,
-                    "TLM,%u,%u,%lu,%ld,%ld,%ld,%d,%d,%d,%ld,%ld,%ld,%u,%u",
+                    "TLM,%u,%u,%lu,%ld,%ld,%ld,%d,%d,%d,%ld,%ld,%ld,%u,%u%n",
                     &device_id,
                     &frame_seq,
                     &timestamp_ms,
@@ -368,9 +593,10 @@ void app_main(void)
                     &humidity_centi,
                     &vibration_milli_g,
                     &vibration_state,
-                    &valid_mask
+                    &valid_mask,
+                    &consumed_chars
                 );
-                if (parsed_fields == 14)
+                if (parsed_fields == 14 && consumed_chars >= 0 && rx_line[consumed_chars] == '\0')
                 {
                      /* MPU6050 当前配置为 ±2g 时，灵敏度为 16384 LSB/g */
                     long accel_x_mg = ((long)accel_x * 1000L) / 16384L;
@@ -406,10 +632,12 @@ void app_main(void)
                     /* 每秒最多发布五条遥测数据 */
                     int64_t now_us = esp_timer_get_time();
 
-                    if (s_mqtt_connected &&
-                        (now_us - last_mqtt_publish_us >= 200000LL))
+                    if (now_us - last_mqtt_publish_us >= 200000LL)
                     {
                         last_mqtt_publish_us = now_us;
+
+                        /* 记录当前数据生成时的 MQTT 连接状态 */
+                        const bool mqtt_online_at_capture = s_mqtt_connected;
 
                         /* 将解析后的数据封装成 JSON */
                         payload_len = snprintf(
@@ -419,6 +647,8 @@ void app_main(void)
                             "{\"device_id\":%u,"
                             "\"frame_seq\":%u,"
                             "\"timestamp_ms\":%lu,"
+                            "\"is_replay\":%s,"
+                            "\"capture_link_state\":\"%s\","
                             "\"roll_deg\":%s%ld.%02ld,"
                             "\"pitch_deg\":%s%ld.%02ld,"
                             "\"yaw_deg\":%s%ld.%02ld,"
@@ -434,6 +664,10 @@ void app_main(void)
                             device_id,
                             frame_seq,
                             timestamp_ms,
+
+                            /* 数据生成时的 MQTT 状态 */
+                            mqtt_online_at_capture ? "false" : "true",
+                            mqtt_online_at_capture ? "online" : "offline",
 
                             roll_cdeg < 0 ? "-" : "",
                             labs(roll_cdeg) / 100L,
@@ -471,32 +705,8 @@ void app_main(void)
                         if (payload_len > 0 &&
                             (size_t)payload_len < sizeof(mqtt_payload))
                         {
-                            int msg_id = esp_mqtt_client_publish(
-                                s_mqtt_client,
-                                MQTT_TELEMETRY_TOPIC,
-                                mqtt_payload,
-                                0,
-                                0,
-                                0
-                            );
-
-                            if (msg_id >= 0)
-                            {
-                                ESP_LOGI(
-                                    MQTT_TAG,
-                                    "Telemetry published: seq=%u, msg_id=%d",
-                                    frame_seq,
-                                    msg_id
-                                );
-                            }
-                            else
-                            {
-                                ESP_LOGW(
-                                    MQTT_TAG,
-                                    "Telemetry publish failed, seq=%u",
-                                    frame_seq
-                                );
-                            }
+                            /* 将 JSON 数据保存到 RAM 缓存 */
+                            mqtt_cache_push(mqtt_payload,(size_t)payload_len);
                         }
                         else
                         {
@@ -510,8 +720,9 @@ void app_main(void)
                 {
                     ESP_LOGW(
                         TAG,
-                        "字段数量错误: parsed=%d, frame=%s",
+                        "帧解析失败: parsed=%d, consumed=%d, frame=%s",
                         parsed_fields,
+                        consumed_chars,
                         rx_line
                     );
                 }
@@ -523,17 +734,20 @@ void app_main(void)
             
             /* 开始接收下一帧 */
             rx_line_len = 0;
+            }
+            else if (rx_line_len < sizeof(rx_line) - 1)
+            {
+                rx_line[rx_line_len++] = ch;
+            }
+            else
+            {
+                /* 超出缓冲区容量，进入丢弃状态 */
+                rx_line_len = 0;
+                rx_discarding = true;
+
+                ESP_LOGW(TAG, "数据帧过长，丢弃当前帧直到换行符");
+            }
         }
-        else if (rx_line_len < sizeof(rx_line) - 1)
-        {
-            rx_line[rx_line_len++] = ch;
-        }
-        else
-        {
-            /* 超长帧，丢弃并重新同步 */
-            rx_line_len = 0;
-            ESP_LOGW(TAG, "数据帧过长，重新同步");
-        }
-    }       
+    mqtt_cache_process();       
     }
 }

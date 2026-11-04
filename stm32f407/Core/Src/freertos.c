@@ -266,16 +266,9 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-	(void)argument;
-	
-	static const uint8_t uart_test_msg[] = "STM32 USART3 OK\r\n";
-
-	(void)HAL_UART_Transmit(&huart3,(uint8_t *)uart_test_msg,(uint16_t)(sizeof(uart_test_msg) - 1U),100U);
-	
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1000U);
   }
   /* USER CODE END StartDefaultTask */
 }

@@ -3,20 +3,18 @@
 **V1.0｜基于 2026-11-03 当前源码的开发基线**
 
 STM32F407VET6 + FreeRTOS + MPU6050 + SHT30 + OLED + ESP32-S3 + UART + Wi-Fi + MQTT
-
-> 用途：当前实现归档、后续开发连续性、项目验收与答辩复盘。  
+ 
 
 ## 0. 项目基线与开发约定
 
 - CubeMX 负责外设、GPIO、时钟、FreeRTOS Task/Queue/Mutex 等配置对象；业务逻辑优先放在 USER CODE 区域。
-- 引脚与电气连接以实际 STM32F407 核心板原理图和已验证连线为准。
-- 每次只引入一个主要变化：修改一个模块后先编译、烧录、实机验证，再进入下一模块。
-- STM32 负责现场实时采集、边缘处理和本地显示；ESP32-S3 负责网络接入与 MQTT 数据转发。
-- 当前 UART 是 ASCII 文本 TLM 帧；AA55 + CRC16 二进制协议属于后续升级，不是当前实现。
+- 引脚与电气连接需要以手里实际的STM32F407 核心板原理图为准。
+- STM32 负责现场实时采集、边缘处理和本地显示；ESP32-S3 负责网络接入与 MQTT 数据转发。实现双MCU协同架构的工业物联网监测网关。
+- 当前 UART 是 ASCII 文本 TLM 帧；后续可以升级为AA55 + CRC16 二进制协议属于后续升级。
 
 ## 1. 项目目标与系统边界
 
-项目目标是构建双 MCU 工业现场监测网关原型。STM32F407VET6 负责传感器采集、姿态与振动边缘处理、OLED 本地 HMI 和遥测帧发送；ESP32-S3 负责 UART 接收解析、Wi-Fi STA 联网和 MQTT JSON 发布。后续再接入 ThingsBoard、离线存储、设备控制和系统健康监测。
+项目目标是构建双 MCU 工业现场监测网关原型。STM32F407VET6 负责传感器采集、姿态与振动边缘处理、OLED 本地 HMI 和遥测帧发送；ESP32-S3 负责 UART 接收解析、Wi-Fi STA 联网和 MQTT JSON 发布。后续版本会接入 ThingsBoard、离线存储、设备控制和系统健康监测。
 
 | 层级 | 当前实现 | 后续升级 |
 |---|---|---|
@@ -24,9 +22,9 @@ STM32F407VET6 + FreeRTOS + MPU6050 + SHT30 + OLED + ESP32-S3 + UART + Wi-Fi + MQ
 | 实时控制 MCU | STM32F407VET6 + FreeRTOS | StorageTask、ControlTask、WatchdogTask |
 | 本地 HMI | SSD1306 128×64 OLED，三页面和按键翻页 | 告警页面、设备健康状态、参数配置 |
 | MCU 间通信 | USART3 → ESP32 UART1，ASCII TLM 文本帧 | 带版本、长度、序号、CRC16 的二进制协议；必要时 ACK/重传 |
-| 网络层 | ESP32-S3 Wi-Fi STA + MQTT 客户端 | TLS、认证、QoS1、断线缓存/补发 |
-| 云端 | 公共 MQTT Broker 和 Topic | ThingsBoard Telemetry/Attributes/RPC/Dashboard/Alarm |
-| 本地持久化 | 尚未接入 | W25Q64 + StorageTask + Store-and-Forward |
+| 网络层 | ESP32-S3 Wi-Fi STA + MQTT 客户端 | TLS、认证、QoS1、后续版本实现断线缓存/补发 |
+| 云端 | 暂时为公共 MQTT Broker 和 Topic | ThingsBoard Telemetry/Attributes/RPC/Dashboard/Alarm（预计在下下个版本接入无源蜂鸣器依据告警等级警报） |
+| 断网缓存 | 正在进行开发 | W25Q64 + StorageTask + Store-and-Forward |
 
 ## 2. 系统总体架构与数据流
 
@@ -85,7 +83,7 @@ STM32F407 ── ASCII TLM,...\r\n ──> ESP32-S3 UART1
 | SHT30 | 温度、相对湿度 | 当前采集链 |
 | SSD1306 OLED 128×64 | 本地三页面 HMI | 当前显示链 |
 | ESP32-S3 | UART 接收、Wi-Fi、MQTT | 当前网络侧源码已实现 |
-| W25Q64 | 后续短期缓存和 Store-and-Forward | 规划接入，尚未并入当前主链 |
+| W25Q64 | 后续短期缓存和 Store-and-Forward | 将在下个版本V1.1更新 |
 
 ### 3.1 引脚记录
 
@@ -94,10 +92,10 @@ STM32F407 ── ASCII TLM,...\r\n ──> ESP32-S3 UART1
 | PB6 / PB7 | I2C1 SCL / SDA | MPU6050、SHT30、OLED 共享总线 |
 | PB10 / PB11 | USART3 TX / RX | STM32 与 ESP32-S3 UART 连接 |
 | PA0 / PB5 | 下一页 / 上一页按键 | PA0 高电平按下；PB5 低电平按下 |
-| PB12–PB15 | SPI2 CS/SCK/MISO/MOSI | W25Q64 规划资源，当前未启用 |
+| PB12–PB15 | SPI2 CS/SCK/MISO/MOSI | 为W25Q64 规划资源 |
 | PE0 / PE1 | 继电器 / 蜂鸣器 | 后续 ControlTask 规划 |
 | PA8 | TIM1_CH1 PWM | 后续执行器/PWM 规划 |
-| PA13 / PA14 | SWDIO / SWCLK | 下载与调试，保留 |
+| PA13 / PA14 | SWDIO / SWCLK | 下载与调试 |
 
 HSE 8 MHz，SYSCLK 168 MHz，AHB 168 MHz，APB1 42 MHz，APB2 84 MHz，HAL Timebase TIM6，CMSIS-RTOS2 / CMSIS_V2，FreeRTOS Tick 1000 Hz。实机配置需要参照MUC外接或内部晶振进行再次核对。
 
@@ -109,14 +107,14 @@ HSE 8 MHz，SYSCLK 168 MHz，AHB 168 MHz，APB1 42 MHz，APB2 84 MHz，HAL Timeb
 | ProcessTask | Normal | 2048 bytes | 阻塞等待 sensorQueue；换算物理量；振动 RMS/状态判断；更新 Telemetry_t |
 | UITask | BelowNormal | 2048 bytes | Telemetry 快照；uiEventQueue；OLED 三页面和分块刷新 |
 | CommTask | BelowNormal | 3072 bytes | 读取 Telemetry 快照；格式化 TLM 文本帧；USART3 发送 |
-| defaultTask | Low | 512 bytes | 后台占位；建议删除一次性 UART 测试输出 |
+| defaultTask | Low | 512 bytes | rtos默认任务使用 |
 
 队列与互斥锁：
 
-- `sensorQueue`：长度 10，消息类型 `SensorMessage_t`；SensorTask → ProcessTask。
-- `uiEventQueue`：长度 4，消息类型 `uint8_t`；按键 EXTI → UITask。
-- `i2c1Mutex`：保护 MPU6050、SHT30、OLED 对共享 I2C1 的访问。
-- `telemetryMutex`：保护 ProcessTask 写入、UITask/CommTask 读取 Telemetry_t 的一致性。
+- sensorQueue：长度 10，消息类型 SensorMessage_t；SensorTask → ProcessTask。
+- uiEventQueue：长度 4，消息类型 uint8_t；按键 EXTI → UITask。
+- i2c1Mutex：保护 MPU6050、SHT30、OLED 对共享 I2C1 的访问。
+- telemetryMutex：保护 ProcessTask 写入、UITask/CommTask 读取 Telemetry_t 的一致性。
 
 当前任务优先级关系：SensorTask > ProcessTask > UITask = CommTask > defaultTask。
 
@@ -130,18 +128,16 @@ HSE 8 MHz，SYSCLK 168 MHz，AHB 168 MHz，APB1 42 MHz，APB2 84 MHz，HAL Timeb
 - ProcessTask 将 raw accel 换算为 g，并计算三轴加速度模长。
 - Yaw 仅由陀螺仪积分时会随时间漂移；没有磁力计时不能解释为绝对磁北航向。
 
-驱动层量程和陀螺仪 Raw→°/s 比例系数需要在最新 `mpu6050.c` 中复核。
-
 ### 5.2 SHT30
 
 - SensorTask 每约 100 ms 启动一次测量，等待约 20 ms 后读取温湿度，目标约 10 Hz。
-- 与 MPU6050、OLED 共用 I2C1，所有访问必须遵守 `i2c1Mutex`。
+- 与 MPU6050、OLED 共用 I2C1，所有访问必须遵守 i2c1Mutex。
 
 ### 5.3 振动 RMS
 
-- 高通滤波系数：`ACCEL_HPF_ALPHA = 0.9845`。
+- 高通滤波系数：ACCEL_HPF_ALPHA = 0.9845。
 - 窗口：100 点；SensorTask 约 200 Hz，因此约 0.5 s 更新一次 RMS。
-- `RMS = sqrt(sum(ax_hpf² + ay_hpf² + az_hpf²) / 100)`。
+- RMS = sqrt(sum(ax_hpf² + ay_hpf² + az_hpf²) / 100)。
 
 | 状态转换 | 阈值 |
 |---|---:|
@@ -150,23 +146,22 @@ HSE 8 MHz，SYSCLK 168 MHz，AHB 168 MHz，APB1 42 MHz，APB2 84 MHz，HAL Timeb
 | 进入 CRITICAL | RMS ≥ 0.15 g |
 | CRITICAL 降级 WARNING | RMS < 0.12 g；若低于 0.04 g 则直接恢复 NORMAL |
 
-这些是当前静止状态代码参数，不代表已经完成行业标准标定。后续应使用实际设备工况数据确定阈值。
+这些是当前静止状态代码参数，不代表已经完成具体行业标准标定。后续应使用实际设备工况数据确定阈值来调整告警等级。
 
 ## 6. Telemetry 数据结构与有效位
 
-`Telemetry_t` 保留通信元信息、MPU6050 姿态与加速度、派生加速度指标、振动 RMS/状态、SHT30 温湿度和 `valid_mask`。
+Telemetry_t保留通信原始信息、MPU6050 姿态与加速度、派生加速度指标、振动 RMS/状态、SHT30 温湿度和 `valid_mask`。
 
 ```c
 #define TELEMETRY_VALID_MPU6050    (1U << 0)
 #define TELEMETRY_VALID_SHT30      (1U << 1)
-/* bit2 保留 */
 #define TELEMETRY_VALID_DERIVED    (1U << 3)
 ```
 
 
 ## 7. STM32 ↔ ESP32-S3 当前 UART 协议
 
-当前版本实现为 ASCII 文本行协议，不是二进制帧。STM32 `CommTask` 从 `Telemetry_t` 复制快照，使用 `snprintf()` 生成以 `TLM,` 开头、以 CRLF 结束的文本，再通过 `huart3` 调用 `HAL_UART_Transmit()` 发送。
+当前版本实现为 ASCII 文本行协议，不是二进制帧。STM32 CommTask从 Telemetry_t复制快照，使用 snprintf()语句生成以 TLM, 开头、以 CRLF 结束的文本，再通过 huart3接口调用 HAL_UART_Transmit()函数发送。
 
 ```text
 TLM,device_id,frame_seq,timestamp_ms,
@@ -189,102 +184,64 @@ vibration_milli_g,vibration_state,valid_mask\r\n
 | vibration_state | 状态枚举值 |
 | valid_mask | 有效位掩码 |
 
-STM32 CommTask 约每 100 ms 发送一次，约 10 Hz。ESP32 使用 UART_NUM_1、GPIO18 TX、GPIO17 RX、115200 baud、8N1 接收，按换行符组帧，再用 `sscanf()` 解析 14 个字段。
+STM32 CommTask 约每 100 ms 发送一次，约 10 Hz。ESP32 使用 UART_NUM_1、GPIO18 TX、GPIO17 RX、115200 baud、8N1 接收，按换行符组帧，再用 sscanf()语句解析 14 个字段。
 
-当前协议没有 CRC、ACK、重传、版本协商或数值范围校验；STM32 采用阻塞式 `HAL_UART_Transmit()`，尚未升级为 DMA/中断发送。
+当前版本没有 CRC、ACK、重传、版本协商或数值范围校验；STM32 采用阻塞式 HAL_UART_Transmit()，将在V1.4版本升级为 DMA/中断发送。
 
 ## 8. ESP32-S3 网络与 MQTT 当前实现
 
 - 初始化 NVS；必要时处理无可用页/版本变化。
 - Wi-Fi Station 模式接入网络；断开时请求重连，获得 IP 后启动 MQTT 客户端。
-- 当前 Broker：`mqtt://broker.emqx.io:1883`，公共测试 Broker，明文 TCP，不具备生产环境所需的 TLS/认证配置。
-- 当前遥测 Topic：`stm32demo/esp32s3_A83F/telemetry`。
-- ESP32 将 TLM 转为 JSON：`device_id`、`frame_seq`、`timestamp_ms`、`roll_deg`、`pitch_deg`、`yaw_deg`、`accel_x_mg`、`accel_y_mg`、`accel_z_mg`、`temperature_c`、`humidity_rh_pct`、`vibration_rms_g`、`vibration_state`、`valid_mask`。
-- 当前 MQTT 发布间隔为 200000 μs，即 200 ms，最大约 5 Hz；源码注释“每秒最多一条”与实际常量不一致，应修正。
+- 当前 Broker为mqtt://broker.emqx.io:1883，属于公共测试 Broker，明文 TCP，不具备生产环境所需的 TLS/认证配置。将在V1.1版本创建私有服务器进行数据收发。
+- 当前遥测 Topic为stm32demo/esp32s3_A83F/telemetry。
+- ESP32 将 TLM 转为 JSON：device_id、frame_seq、timestamp_ms、roll_deg、pitch_deg、yaw_deg、accel_x_mg、accel_y_mg、accel_z_mg、temperature_c、humidity_rh_pct、vibration_rms_g、vibration_state、valid_mask。
+- 当前 MQTT 发布间隔为 200000 μs，即 200 ms，最大约 5 Hz；一秒约发送5条消息。
 - 当前 publish 参数使用 QoS 0、retain 0。
-- Wi-Fi 凭据由 `wifi_credentials.h` 提供；真实 SSID/密码不得提交到公开仓库。
+- Wi-Fi 凭据会在wifi_credentials.h中提供；具体配置参照自己的WiFi配置。
 
-源码具备 UART→解析→JSON→MQTT 的实现路径，但代码审查不能证明 Broker 已持续收到数据。应使用 MQTTX 等订阅客户端完成端到端验收并保存日志/截图。
+现在已具备 UART→解析→JSON→MQTT 的实现路径，同时在MQTTX中订阅相应的话题已持续收到数据。
 
 ## 9. 当前 DEMO 阶段验收状态
 
 | 功能项 | 当前判断 |
 |---|---|
-| MPU6050 采集与姿态计算 | 已实现；此前开发记录有实机运行结果 |
-| SHT30 温湿度 | 已实现；此前开发记录有实机运行结果 |
-| FreeRTOS 队列/互斥锁 | 已实现；此前已验证 |
-| OLED 三页面和按键翻页 | 已实现；用户此前反馈修改后屏幕显示正常 |
-| I2C 互斥锁稳定性 | 用户此前反馈 `g_i2c1_mutex_error_count=0`、`g_oled_mutex_retry_count=0`；清理后需回归 |
-| STM32 USART3 TLM 发送 | 源码已实现；需记录连续运行结果 |
-| ESP32 UART 解析 | 源码已实现；需记录真实接收日志 |
-| Wi-Fi/MQTT JSON 发布 | 源码已实现；需用订阅端确认持续收数 |
-| ThingsBoard / W25Q64 | 未实现 |
+| MPU6050 采集与姿态计算 | 已实现； |
+| SHT30 温湿度 | 已实现； |
+| FreeRTOS 队列/互斥锁 | 已实现； |
+| OLED 三页面和按键翻页 | 已实现； |
+| I2C 互斥锁稳定性 | 已实现； |
+| STM32 USART3 TLM 发送 | 已实现；连续运行两小时无断联无丢失 |
+| ESP32 UART 解析 | 已实现；连续运行两小时无解析错误 |
+| Wi-Fi/MQTT JSON 发布 | 源码已实现；MQTTX订阅客户端持续接收 |
+| ThingsBoard / W25Q64 | 后续进行开发实现 |
 
-**阶段结论：** 项目已进入具备完整功能链代码的 DEMO/MVP 阶段。若 MQTTX 能持续收到字段正确、序号递增的 JSON，且断网重连和长时间运行通过，即可正式验收当前端到端 DEMO；当前还不能称为工业级可靠性产品。
+**阶段结论：** 项目已进入具备完整功能链代码的 DEMO/MVP 阶段。 MQTTX 能持续收到字段正确、序号递增的 JSON，且断网重连和长时间运行通过，完成前端到端 DEMO；还需继续开发升级为工业级可靠性产品。
 
-## 10.`hello_world_main.c`
-
-- 删除未使用的 `text_buffer` 和已注释的原始 HEX/ASCII 调试输出代码。
-- 删除重复的 `esp_err.h` include。
-- 删除 `s_hello_published`、`MQTT_TOPIC` 和一次性 Hello 测试消息分支。
-- 保留 UART 行接收、TLM 解析、JSON 组包、Wi-Fi 和 telemetry Topic 发布。
-- 将“每秒最多发布一条”注释修正为“每 200 ms 最多发布一条”；不改当前 200000 μs 常量。
-- 清理 STM32 `defaultTask` 中的一次性 USART3 测试字符串，避免 ESP32 收到非 TLM 文本。
-
-全工程检查命令：
-
-```bash
-git grep -niE 'INA219|ina219|voltage_v|current_a|power_w|TELEMETRY_VALID_INA219|SENSOR_TYPE_INA219'
-```
-
-## 11. 后续升级路线
+## 10. 后续升级路线
 
 | 阶段 | 升级主题 | 主要工作 |
 |---|---|---|
-| V1.3 | 当前 DEMO 清理与冻结 | 删除 INA219 残留和无用调试定义；编译、烧录、OLED 回归；MQTTX 订阅验收 |
-| V1.4 | UART 可靠性 | 协议版本、帧头、长度、序号、CRC16；异常帧丢弃；必要时 ACK/重传；逐步迁移 DMA/IRQ |
-| V1.5 | ESP32 网络与云端 | MQTT TLS/认证、QoS1、设备独立 Topic、LWT、重连退避；ThingsBoard Telemetry/Attributes/Dashboard/Alarm/RPC |
-| V1.6 | W25Q64 离线存储 | SPI2 驱动、StorageTask、循环日志/事件记录、网络恢复后按序补发 |
-| V1.7 | 控制与系统健康 | ControlTask、Relay、Buzzer、PWM；IWDG、任务心跳、栈水位、堆余量、队列水位 |
+| V1.1 | UART 可靠性 | 协议版本、帧头、长度、序号、CRC16；异常帧丢弃；必要时 ACK/重传；逐步迁移 DMA/IRQ |
+| V1.2 | ESP32 网络与云端 | MQTT TLS/认证、QoS1、设备独立 Topic、LWT、重连退避；ThingsBoard Telemetry/Attributes/Dashboard/Alarm/RPC |
+| V1.3 | W25Q64 离线存储 | SPI2 驱动、StorageTask、循环日志/事件记录、网络恢复后按序补发 |
+| V1.4 | 控制与系统健康 | ControlTask、Relay、Buzzer、PWM；IWDG、任务心跳、栈水位、堆余量、队列水位 |
 | V2.0 | 工程化与长期测试 | 长时间压力测试、故障注入、参数配置、日志、版本发布、演示与测试报告 |
 
-### 11.1 UART 协议升级建议
-
-后续可升级为：
-
-```text
-AA 55 + VER + DEV + SEQ + TYPE + LEN + PAYLOAD + CRC16
-```
-
-CRC 覆盖 VER 至 PAYLOAD；SEQ 用于识别重复/丢帧；ACK/超时重传作为后续可靠性功能。不要在当前 DEMO 验收前同时改动协议与 MQTT 逻辑。
-
-### 11.2 MQTT/云端升级建议
+### 10.1 MQTT/云端升级规划
 
 - 从公共明文 Broker 迁移到自有 Broker 或 ThingsBoard，配置 TLS 与设备认证。
 - 按设备 ID 规划 Topic，避免多个设备共用固定 Topic。
 - 根据业务要求采用 QoS1，并设计重复消息去重策略。
 - 云端优先上传边缘摘要、振动状态和事件，不把 200 Hz 原始 MPU 数据全部推送到云端；需要波形时再做 Burst Upload。
 
-### 11.3 存储、控制与看门狗
+### 10.2 存储、控制与看门狗
 
 - W25Q64 通过 SPI2 接入，先完成读写/擦除/掉电恢复测试，再引入 StorageTask。
 - Store-and-Forward 需处理缓存上限、Flash 磨损、满容量和掉电中断。
 - ControlTask 加入本地安全条件、输出默认态和命令超时。
 - WatchdogTask 监控关键任务心跳、栈高水位、堆余量、队列积压和关键错误计数。
 
-## 12. DEMO 验收测试建议
-
-| 测试 | 建议通过条件 |
-|---|---|
-| 传感器与 OLED | 三页面稳定；数据持续更新；无黑屏/卡页 |
-| I2C 共享总线 30–60 min | mutex 错误计数保持 0；OLED 更新错误计数无持续增长 |
-| 队列负载 | 队列丢帧计数不持续增长；队列不长期满载 |
-| UART 连续传输 | TLM 字段数始终为 14；序号按预期递增；无持续乱码/超长帧 |
-| MQTT 遥测 | JSON 可解析；单位/符号正确；序号递增；更新间隔符合当前 200 ms 限流 |
-| Wi-Fi 断线恢复 | ESP32 恢复 MQTT 发布；STM32 采集和 OLED 不受影响 |
-| 长时间运行 | 至少 1 h 无异常复位/任务卡死/堆耗尽；错误计数无异常增长 |
-
-## 13. 当前已知限制与风险
+## 11. 当前已知限制与风险
 
 - TLM 文本帧无 CRC/ACK/Retry；UART 解析依赖逗号分隔和换行边界。
 - STM32 使用阻塞式 `HAL_UART_Transmit()`；后续评估 DMA/中断发送。
@@ -294,8 +251,8 @@ CRC 覆盖 VER 至 PAYLOAD；SEQ 用于识别重复/丢帧；ACK/超时重传作
 - 当前未接入 W25Q64、ThingsBoard、执行器控制、看门狗和 OTA。
 
 
-## 14. 本版本结论
+## 12. 本版本结论
 
-V1.3 将项目状态从 V1.2 的“STM32 本地采集与 OLED HMI 基线”更新为“STM32 采集/边缘处理/本地 HMI + CommTask 文本遥测 + ESP32-S3 UART/Wi-Fi/MQTT 源码链路已形成”的阶段性 DEMO/MVP。
+V1.0 将项目状态从 初始 的“STM32 本地采集与 OLED HMI 基线”更新为“STM32 采集/边缘处理/本地 HMI + CommTask 文本遥测 + ESP32-S3 UART/Wi-Fi/MQTT 源码链路已形成”的阶段性 DEMO/MVP。
 
-当前最优先事项是完成 INA219 永久清理、删除无引用的临时调试变量、冻结现有 ASCII TLM 数据字段，并通过 MQTTX 和长时间运行测试形成可复现验收记录。之后按 V1.4→V2.0 路线升级通信可靠性、云端能力、离线存储、控制与系统健康管理。
+当前最优先事项是按 V1.1→V2.0 路线升级通信可靠性、云端能力、离线存储、控制与系统健康管理。
