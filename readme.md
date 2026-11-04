@@ -1,11 +1,9 @@
 # 工业 IoT 网关项目技术设计与开发同步文档
 
-**V1.0｜基于 2026-11-03 当前源码的开发基线**
-
 STM32F407VET6 + FreeRTOS + MPU6050 + SHT30 + OLED + ESP32-S3 + UART + Wi-Fi + MQTT
  
 
-## 0. 项目基线与开发约定
+## 0. 项目基线与开发设计
 
 - CubeMX 负责外设、GPIO、时钟、FreeRTOS Task/Queue/Mutex 等配置对象；业务逻辑优先放在 USER CODE 区域。
 - 引脚与电气连接需要以手里实际的STM32F407 核心板原理图为准。
@@ -14,7 +12,7 @@ STM32F407VET6 + FreeRTOS + MPU6050 + SHT30 + OLED + ESP32-S3 + UART + Wi-Fi + MQ
 
 ## 1. 项目目标与系统边界
 
-项目目标是构建双 MCU 工业现场监测网关原型。STM32F407VET6 负责传感器采集、姿态与振动边缘处理、OLED 本地 HMI 和遥测帧发送；ESP32-S3 负责 UART 接收解析、Wi-Fi STA 联网和 MQTT JSON 发布。后续版本会接入 ThingsBoard、离线存储、设备控制和系统健康监测。
+项目目标是构建双 MCU 工业现场监测网关原型。STM32F407VET6 负责传感器采集、姿态与振动边缘处理、OLED 本地 HMI 和遥测帧发送；ESP32-S3 负责 UART 接收解析、Wi-Fi STA 联网和 MQTT JSON 发布。后续版本会接入ThingsBoard、离线存储、设备控制和系统健康监测。
 
 | 层级 | 当前实现 | 后续升级 |
 |---|---|---|
@@ -106,8 +104,8 @@ HSE 8 MHz，SYSCLK 168 MHz，AHB 168 MHz，APB1 42 MHz，APB2 84 MHz，HAL Timeb
 | SensorTask | AboveNormal | 2048 bytes | MPU6050 约 200 Hz；SHT30 约 10 Hz 两阶段测量；投递 sensorQueue |
 | ProcessTask | Normal | 2048 bytes | 阻塞等待 sensorQueue；换算物理量；振动 RMS/状态判断；更新 Telemetry_t |
 | UITask | BelowNormal | 2048 bytes | Telemetry 快照；uiEventQueue；OLED 三页面和分块刷新 |
-| CommTask | BelowNormal | 3072 bytes | 读取 Telemetry 快照；格式化 TLM 文本帧；USART3 发送 |
-| defaultTask | Low | 512 bytes | rtos默认任务使用 |
+| CommTask | BelowNormal | 3072 bytes | 读取 Telemetry 快照；格式化TLM文本帧；USART3发送 |
+| defaultTask | Low | 512 bytes | rtos默认任务 |
 
 队列与互斥锁：
 
